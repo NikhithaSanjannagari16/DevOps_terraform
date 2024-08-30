@@ -1,0 +1,75 @@
+data "azurerm_key_vault" "winkeyvault" {
+  resource_group_name = module.globals.secretkeyvault_resourcegroup
+  name         = module.globals.secretkeyvault
+}
+data "azurerm_key_vault" "winkeyvault1" {
+  resource_group_name = module.globals.resource_group
+  name         = "wu2-${module.globals.environment}-vault01"
+}
+
+data "azurerm_key_vault_secret" "winkvsecret" {
+  name = "windows-vm-password" // pwd is testadmin@123
+  key_vault_id = data.azurerm_key_vault.winkeyvault.id
+}
+
+data "azurerm_subnet" "win_vm_subnet" {
+  name                 =  "${module.globals.environment}-${module.globals.windows-vm-subnet_name}"
+  virtual_network_name = "${module.globals.environment}-vnet"
+  resource_group_name  = module.globals.resource_group
+}
+
+resource "azurerm_network_interface" "winnic" {
+  name                = var.win_vm_nic_name
+  location            = module.globals.location
+  resource_group_name = module.globals.resource_group
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = data.azurerm_subnet.win_vm_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_windows_virtual_machine" "winvm" {
+  name                = var.win_vm_name
+  resource_group_name = module.globals.resource_group
+  location            = module.globals.location
+  size                = var.win_vm_size
+  admin_username      = "Azadmin"
+  admin_password      = data.azurerm_key_vault_secret.winkvsecret.value
+  network_interface_ids = [
+    azurerm_network_interface.winnic.id,
+  ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = var.win_vm_sku
+    version   = "latest"
+  }
+  # secret {
+  #   key_vault_id = data.azurerm_key_vault.keyvault.id
+  # }
+}
+data "azurerm_backup_policy_vm" "policy" {
+  name                = module.globals.recovery_vault_policy_name
+  recovery_vault_name = module.globals.recovery_service_vaultname
+  resource_group_name =  module.globals.resource_group
+}
+resource "azurerm_backup_protected_vm" "winvm1" {
+  resource_group_name = module.globals.resource_group
+  recovery_vault_name = module.globals.recovery_service_vaultname
+  source_vm_id        = azurerm_windows_virtual_machine.winvm.id
+  backup_policy_id    = data.azurerm_backup_policy_vm.policy.id
+}
+resource "azurerm_key_vault_secret" "win_pwd" {
+  key_vault_id = data.azurerm_key_vault.winkeyvault1.id
+  name         = "${module.globals.environment}-windows-vm-password"
+  value        = "user:Azadmin , pwd: ${azurerm_windows_virtual_machine.winvm.admin_password}"
+  tags = merge(module.globals.default_tags)
+}
